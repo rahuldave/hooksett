@@ -3,6 +3,7 @@ import inspect
 from functools import wraps
 import ast
 import types
+import textwrap
 
 
 T = TypeVar('T')
@@ -226,6 +227,28 @@ def setup_local_var_tracking(func, local_tracked_vars):
 
     return wrapper
 
+# Function to parse method source with proper indentation handling
+def parse_method_body(method):
+    """Parse a method body handling indentation correctly"""
+    try:
+        # Get the source code of the method
+        source = inspect.getsource(method)
+        
+        # Dedent the source code to handle method inside class
+        source = textwrap.dedent(source)
+        
+        # Parse the source code
+        tree = ast.parse(source)
+        
+        # Inspect for tracked variables
+        visitor = LocalVarVisitor()
+        visitor.visit(tree)
+        
+        return visitor.tracked_vars
+    except (OSError, TypeError, SyntaxError) as e:
+        print(f"Warning: Could not parse method {method.__name__}: {str(e)}")
+        return {}
+
 # Metaclass for tracked classes
 class TrackedClass(type):
     def __new__(cls, name, bases, namespace):
@@ -243,25 +266,26 @@ class TrackedClass(type):
                     default
                 )
         
-        # Process methods to look for local variable annotations
-        for attr_name, attr_value in list(namespace.items()):
-            if isinstance(attr_value, types.FunctionType):
-                try:
+        # Create the class first to avoid parsing methods prematurely
+        created_class = super().__new__(cls, name, bases, namespace)
+        
+        # Now process methods in the created class
+        for attr_name in dir(created_class):
+            try:
+                attr_value = getattr(created_class, attr_name)
+                if isinstance(attr_value, types.FunctionType) and not attr_name.startswith('__'):
                     # Parse method body to find local tracked variables
-                    source = inspect.getsource(attr_value)
-                    tree = ast.parse(source)
-                    visitor = LocalVarVisitor()
-                    visitor.visit(tree)
-                    local_tracked_vars = visitor.tracked_vars
+                    local_tracked_vars = parse_method_body(attr_value)
                     
                     # If we found tracked local vars, wrap the method
                     if local_tracked_vars:
-                        namespace[attr_name] = setup_local_var_tracking(attr_value, local_tracked_vars)
-                except (OSError, TypeError):
-                    # Unable to get source, skip this method
-                    pass
-
-        return super().__new__(cls, name, bases, namespace)
+                        wrapped_method = setup_local_var_tracking(attr_value, local_tracked_vars)
+                        setattr(created_class, attr_name, wrapped_method)
+            except (AttributeError, TypeError):
+                # Skip if we can't process this attribute
+                continue
+                
+        return created_class
 
 def tracked(cls):
     """Class decorator to add tracking"""
@@ -272,11 +296,15 @@ def track_function(func):
     hook_manager = HookManager()
     
     # Parse function body to find local tracked variables
-    source = inspect.getsource(func)
-    tree = ast.parse(source)
-    visitor = LocalVarVisitor()
-    visitor.visit(tree)
-    local_tracked_vars = visitor.tracked_vars
+    try:
+        source = inspect.getsource(func)
+        tree = ast.parse(source)
+        visitor = LocalVarVisitor()
+        visitor.visit(tree)
+        local_tracked_vars = visitor.tracked_vars
+    except (OSError, TypeError, SyntaxError):
+        # If we can't parse the source, assume no local tracked vars
+        local_tracked_vars = {}
     
     # Create a wrapper that handles parameter loading/validation
     @wraps(func)
