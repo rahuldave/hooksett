@@ -2,6 +2,7 @@ from typing import TypeVar, Any, Protocol, Generic
 import inspect
 from functools import wraps
 import ast
+import types
 
 
 T = TypeVar('T')
@@ -133,28 +134,6 @@ class TrackedDescriptor:
         private_dict[self.name] = value
         self.hook_manager.save_value(self.name, value, self.type_hint)
 
-# Metaclass for tracked classes
-class TrackedClass(type):
-    def __new__(cls, name, bases, namespace):
-        annotations = namespace.get('__annotations__', {})
-
-        for var_name, type_hint in annotations.items():
-            origin = getattr(type_hint, '__origin__', None)
-            if origin in (Parameter, Metric, Artifact):
-                has_default = var_name in namespace
-                default = namespace.get(var_name)
-                namespace[var_name] = TrackedDescriptor(
-                    type_hint,
-                    has_default,
-                    default
-                )
-
-        return super().__new__(cls, name, bases, namespace)
-
-def tracked(cls):
-    """Class decorator to add tracking"""
-    return TrackedClass(cls.__name__, cls.__bases__, dict(cls.__dict__))
-
 # AST visitor to find local variable annotations
 class LocalVarVisitor(ast.NodeVisitor):
     def __init__(self):
@@ -180,66 +159,17 @@ class LocalVarVisitor(ast.NodeVisitor):
                         }
         self.generic_visit(node)
 
-def track_function(func):
-    """Function decorator that handles tracking"""
+# Function to set up tracing for local variables
+def setup_local_var_tracking(func, local_tracked_vars):
+    """Set up tracing for local variable tracking in a function"""
     hook_manager = HookManager()
-    
-    # Parse function body to find local tracked variables
-    source = inspect.getsource(func)
-    tree = ast.parse(source)
-    visitor = LocalVarVisitor()
-    visitor.visit(tree)
-    local_tracked_vars = visitor.tracked_vars
     
     # Print tracking information - pre-function hook opportunity
     for var_name, info in local_tracked_vars.items():
-        print(f"Found local tracked variable: {var_name} of type {info['type']}")
-
+        print(f"Found local tracked variable: {var_name} of type {info['type']} in {func.__name__}")
+    
     @wraps(func)
     def wrapper(*args, **kwargs):
-        # Get function signature
-        sig = inspect.signature(func)
-        bound_args = sig.bind(*args, **kwargs)
-        bound_args.apply_defaults()
-
-        # Check if we need hooks
-        needs_hooks = any(
-            value is None and
-            getattr(func.__annotations__.get(name, None), '__origin__', None)
-            in (Parameter, Metric, Artifact)
-            for name, value in bound_args.arguments.items()
-        )
-
-        if needs_hooks and not hook_manager.input_hooks:
-            raise HookError(
-                f"Function {func.__name__} requires input hooks for parameters with None defaults. "
-                f"Initialize hooks with init_hooks() before calling."
-            )
-
-        # Process parameters
-        final_kwargs = {}
-        for name, value in bound_args.arguments.items():
-            type_hint = func.__annotations__.get(name)
-            if type_hint is None:
-                final_kwargs[name] = value
-                continue
-
-            origin = getattr(type_hint, '__origin__', None)
-            if origin not in (Parameter, Metric, Artifact):
-                final_kwargs[name] = value
-                continue
-
-            # If value is None, try to load from hooks
-            if value is None:
-                value = hook_manager.load_value(name, type_hint)
-            else:
-                # Validate explicitly provided value
-                for hook in hook_manager.input_hooks:
-                    value = hook.validate(name, value, type_hint)
-
-            final_kwargs[name] = value
-            hook_manager.save_value(name, value, type_hint)
-
         # Dictionary to track the final values of local variables
         final_tracked_values = {}
         
@@ -285,13 +215,116 @@ def track_function(func):
             sys.settrace(trace_local_vars)
             
             try:
-                result = func(**final_kwargs)
+                result = func(*args, **kwargs)
                 return result
             finally:
                 # Restore original trace function
                 sys.settrace(old_trace)
         else:
             # No local variables to track, just run the function
-            return func(**final_kwargs)
+            return func(*args, **kwargs)
+
+    return wrapper
+
+# Metaclass for tracked classes
+class TrackedClass(type):
+    def __new__(cls, name, bases, namespace):
+        annotations = namespace.get('__annotations__', {})
+
+        # Process class attributes with special annotations
+        for var_name, type_hint in annotations.items():
+            origin = getattr(type_hint, '__origin__', None)
+            if origin in (Parameter, Metric, Artifact):
+                has_default = var_name in namespace
+                default = namespace.get(var_name)
+                namespace[var_name] = TrackedDescriptor(
+                    type_hint,
+                    has_default,
+                    default
+                )
+        
+        # Process methods to look for local variable annotations
+        for attr_name, attr_value in list(namespace.items()):
+            if isinstance(attr_value, types.FunctionType):
+                try:
+                    # Parse method body to find local tracked variables
+                    source = inspect.getsource(attr_value)
+                    tree = ast.parse(source)
+                    visitor = LocalVarVisitor()
+                    visitor.visit(tree)
+                    local_tracked_vars = visitor.tracked_vars
+                    
+                    # If we found tracked local vars, wrap the method
+                    if local_tracked_vars:
+                        namespace[attr_name] = setup_local_var_tracking(attr_value, local_tracked_vars)
+                except (OSError, TypeError):
+                    # Unable to get source, skip this method
+                    pass
+
+        return super().__new__(cls, name, bases, namespace)
+
+def tracked(cls):
+    """Class decorator to add tracking"""
+    return TrackedClass(cls.__name__, cls.__bases__, dict(cls.__dict__))
+
+def track_function(func):
+    """Function decorator that handles tracking"""
+    hook_manager = HookManager()
+    
+    # Parse function body to find local tracked variables
+    source = inspect.getsource(func)
+    tree = ast.parse(source)
+    visitor = LocalVarVisitor()
+    visitor.visit(tree)
+    local_tracked_vars = visitor.tracked_vars
+    
+    # Create a wrapper that handles parameter loading/validation
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        # Get function signature
+        sig = inspect.signature(func)
+        bound_args = sig.bind(*args, **kwargs)
+        bound_args.apply_defaults()
+
+        # Check if we need hooks
+        needs_hooks = any(
+            value is None and
+            getattr(func.__annotations__.get(name, None), '__origin__', None)
+            in (Parameter, Metric, Artifact)
+            for name, value in bound_args.arguments.items()
+        )
+
+        if needs_hooks and not hook_manager.input_hooks:
+            raise HookError(
+                f"Function {func.__name__} requires input hooks for parameters with None defaults. "
+                f"Initialize hooks with init_hooks() before calling."
+            )
+
+        # Process parameters
+        final_kwargs = {}
+        for name, value in bound_args.arguments.items():
+            type_hint = func.__annotations__.get(name)
+            if type_hint is None:
+                final_kwargs[name] = value
+                continue
+
+            origin = getattr(type_hint, '__origin__', None)
+            if origin not in (Parameter, Metric, Artifact):
+                final_kwargs[name] = value
+                continue
+
+            # If value is None, try to load from hooks
+            if value is None:
+                value = hook_manager.load_value(name, type_hint)
+            else:
+                # Validate explicitly provided value
+                for hook in hook_manager.input_hooks:
+                    value = hook.validate(name, value, type_hint)
+
+            final_kwargs[name] = value
+            hook_manager.save_value(name, value, type_hint)
+
+        # Now run the function with processed parameters and local variable tracking
+        return setup_local_var_tracking(func, local_tracked_vars)(**final_kwargs)
 
     return wrapper
