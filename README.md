@@ -145,7 +145,33 @@ The library uses Python's type annotations and descriptors to provide a clean, i
    HookManager().add_output_hook(MyCustomHook())
    ```
 
+## Development
+
+### Running Tests
+
+Hooksett uses pytest for unit tests. To run the tests:
+
+```bash
+# Run all unit tests
+pixi run test
+```
+
+### Running Integration Tests
+
+Hooksett includes integration tests that demonstrate and verify functionality:
+
+```bash
+# Run all integration tests
+pixi run integration
+
+# Run specific example files
+cd examples
+pixi run python traced_example.py
+pixi run python ml_model.py
+```
+
 ## Requirements
 
 - Python 3.11+
 - PyYAML 6.0.2+
+- pytest (for development)
