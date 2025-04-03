@@ -18,7 +18,20 @@ platforms = ["osx-arm64"]
 hooksett = { path = ".", editable = true }
 
 [tool.pixi.tasks]
+integration = "cd examples && python traced_example.py && python function.py && python class.py && python local_vars.py && python class_local_vars.py && python ml_model.py && python custom_types_demo.py"
 
+# Main dependencies for default environment
 [tool.pixi.dependencies]
 python = "==3.13"
 pyyaml = ">=6.0.2,<7"
+
+# Test feature configuration
+[tool.pixi.feature.test.dependencies]
+pytest = ">=7.0.0"
+
+# Test environment tasks
+[tool.pixi.feature.test.tasks]
+test = "pytest tests/"
+
+[tool.pixi.environments]
+test = ["test"]

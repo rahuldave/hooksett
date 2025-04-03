@@ -1,0 +1,3 @@
+"""
+Hooksett examples package
+"""

@@ -8,10 +8,25 @@ import textwrap
 
 T = TypeVar('T')
 
-# Type aliases
-type Parameter[T] = T
-type Metric[T] = T
-type Artifact[T] = T
+# Type registry for tracked types
+_TRACKED_TYPES = {}
+
+# Core type alias - a basic traced variable
+type Traced[T] = T
+
+# Register the core type
+_TRACKED_TYPES['Traced'] = Traced
+
+def register_tracked_type(name: str, type_alias: type) -> None:
+    """Register a new tracked type in the system.
+    
+    Args:
+        name: The name of the tracked type
+        type_alias: The type alias to register
+    """
+    _TRACKED_TYPES[name] = type_alias
+    # Make the type available at the module level
+    globals()[name] = type_alias
 
 class HookError(Exception):
     """Raised when a value needs to be loaded but no hooks are available"""
@@ -144,9 +159,9 @@ class LocalVarVisitor(ast.NodeVisitor):
         # Find annotations like: x: Parameter[int] = 5
         if isinstance(node.annotation, ast.Subscript):
             if isinstance(node.annotation.value, ast.Name):
-                # Get the annotation type (Parameter, Metric, Artifact)
+                # Get the annotation type (any tracked type from registry)
                 anno_type = node.annotation.value.id
-                if anno_type in ('Parameter', 'Metric', 'Artifact'):
+                if anno_type in _TRACKED_TYPES:
                     # Get the variable name
                     if isinstance(node.target, ast.Name):
                         var_name = node.target.id
@@ -195,14 +210,11 @@ def setup_local_var_tracking(func, local_tracked_vars):
                         tracked_type = local_tracked_vars[var_name]['type']
                         value_type = type(value)
                         
-                        # Create a synthetic type hint
+                        # Create a synthetic type hint from the registry
                         type_hint = None
-                        if tracked_type == 'Parameter':
-                            type_hint = Parameter[value_type]
-                        elif tracked_type == 'Metric':
-                            type_hint = Metric[value_type]
-                        elif tracked_type == 'Artifact':
-                            type_hint = Artifact[value_type]
+                        if tracked_type in _TRACKED_TYPES:
+                            tracked_type_alias = _TRACKED_TYPES[tracked_type]
+                            type_hint = tracked_type_alias[value_type]
                         
                         # Save the value via hooks if we have a valid type hint
                         if type_hint:
@@ -257,7 +269,8 @@ class TrackedClass(type):
         # Process class attributes with special annotations
         for var_name, type_hint in annotations.items():
             origin = getattr(type_hint, '__origin__', None)
-            if origin in (Parameter, Metric, Artifact):
+            # Check if origin is any of our tracked types
+            if origin in _TRACKED_TYPES.values():
                 has_default = var_name in namespace
                 default = namespace.get(var_name)
                 namespace[var_name] = TrackedDescriptor(
@@ -318,7 +331,7 @@ def track_function(func):
         needs_hooks = any(
             value is None and
             getattr(func.__annotations__.get(name, None), '__origin__', None)
-            in (Parameter, Metric, Artifact)
+            in _TRACKED_TYPES.values()
             for name, value in bound_args.arguments.items()
         )
 
@@ -337,7 +350,7 @@ def track_function(func):
                 continue
 
             origin = getattr(type_hint, '__origin__', None)
-            if origin not in (Parameter, Metric, Artifact):
+            if origin not in _TRACKED_TYPES.values():
                 final_kwargs[name] = value
                 continue
 

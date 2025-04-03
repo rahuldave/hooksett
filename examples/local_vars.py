@@ -1,6 +1,9 @@
-from hooksett import HookManager, track_function
-from hooksett import Parameter, Metric, Artifact
-from hooksett.hooks import RangeValidationHook, TypeValidationHook, YAMLConfigInput, MLflowOutput
+"""
+Example demonstrating local variable tracking in functions
+"""
+from hooksett import HookManager, track_function, Traced
+from hooksett.hooks import RangeValidationHook, TypeValidationHook, YAMLConfigInput, TracedOutput
+from ml_types import Parameter, Metric, Artifact, MLflowOutput
 
 
 def init_hooks(
@@ -21,6 +24,7 @@ def init_hooks(
         manager.add_input_hook(YAMLConfigInput(config_path))
 
     # Add output hooks
+    manager.add_output_hook(TracedOutput())
     if use_mlflow:
         manager.add_output_hook(MLflowOutput())
 
@@ -33,22 +37,27 @@ def process_data(
 ) -> float:
     # Local variable with Parameter annotation
     batch_size: Parameter[int] = 32
-    
+
     # Local variable with Metric annotation
     accuracy: Metric[float] = 0.0
     
+    # Local variable with Traced annotation
+    step: Traced[int] = 0
+
     # Processing logic
     for i in range(epochs):
         # Update local metrics during processing
+        step = i + 1
         accuracy = accuracy + 0.1 * learning_rate * batch_size / 100
-    
+
     # These annotations will be tracked and output hooks will be called
+    print("Before end, accuracy:", accuracy)
     return accuracy
 
 
 # Initialize hooks with validation
 init_hooks(
-    config_path="examples/config.yaml",
+    config_path="config.yaml",
     use_mlflow=True,
     param_ranges={
         'learning_rate': (0.0, 1.0),

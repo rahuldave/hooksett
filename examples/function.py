@@ -1,6 +1,9 @@
-from hooksett import HookManager, track_function
-from hooksett import Parameter, Metric
-from hooksett.hooks import RangeValidationHook, TypeValidationHook, YAMLConfigInput, MLflowOutput
+"""
+Example demonstrating using Hooksett with functions
+"""
+from hooksett import HookManager, track_function, Traced
+from hooksett.hooks import RangeValidationHook, TypeValidationHook, YAMLConfigInput, TracedOutput
+from ml_types import Parameter, Metric, MLflowOutput
 
 def init_hooks(
     config_path: str | None = None,
@@ -20,6 +23,7 @@ def init_hooks(
         manager.add_input_hook(YAMLConfigInput(config_path))
 
     # Add output hooks
+    manager.add_output_hook(TracedOutput())
     if use_mlflow:
         manager.add_output_hook(MLflowOutput())
 
@@ -33,12 +37,14 @@ def train_model(
     # Use the parameters
     # Now make a metric
     auc: Metric[float] = 0.95
+    # Basic traced value for demonstration
+    progress: Traced[float] = 1.0
     return auc
 
 
 # Initialize hooks with validation
 init_hooks(
-    config_path="examples/config.yaml",
+    config_path="config.yaml",
     use_mlflow=True,
     param_ranges={
         'learning_rate': (0.0, 1.0),

@@ -1,6 +1,9 @@
-from hooksett import HookManager, tracked
-from hooksett import Parameter, Metric, Artifact
-from hooksett.hooks import RangeValidationHook, TypeValidationHook, YAMLConfigInput, MLflowOutput
+"""
+Example demonstrating local variable tracking in class methods
+"""
+from hooksett import HookManager, tracked, Traced
+from hooksett.hooks import RangeValidationHook, TypeValidationHook, YAMLConfigInput, TracedOutput
+from ml_types import Parameter, Metric, Artifact, MLflowOutput
 
 
 def init_hooks(
@@ -21,6 +24,7 @@ def init_hooks(
         manager.add_input_hook(YAMLConfigInput(config_path))
 
     # Add output hooks
+    manager.add_output_hook(TracedOutput())
     if use_mlflow:
         manager.add_output_hook(MLflowOutput())
 
@@ -44,9 +48,13 @@ class AdvancedModel:
         train_loss: Metric[float] = 0.0
         val_accuracy: Metric[float] = 0.0
         
+        # Local variable with basic Traced annotation
+        iteration: Traced[int] = 0
+        
         # Training simulation
         for epoch in range(self.epochs):
             # Update metrics during processing
+            iteration = epoch + 1
             train_loss = train_loss + (1.0 - epoch * self.learning_rate / 100)
             val_accuracy = val_accuracy + (epoch * 0.1 * dropout_rate)
         
@@ -62,7 +70,11 @@ class AdvancedModel:
         precision: Metric[float] = 0.0
         recall: Metric[float] = 0.0
         
+        # Local variable with Traced annotation
+        eval_step: Traced[int] = 0
+        
         # Simple evaluation simulation
+        eval_step = 1
         test_accuracy = len(test_data) * self.learning_rate / 1000
         if test_accuracy > threshold:
             precision = 0.95
@@ -81,7 +93,7 @@ class AdvancedModel:
 
 # Initialize hooks with validation
 init_hooks(
-    config_path="examples/config.yaml",
+    config_path="config.yaml",
     use_mlflow=True,
     param_ranges={
         'learning_rate': (0.0, 1.0),

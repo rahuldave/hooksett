@@ -1,6 +1,10 @@
-from . import InputHook, OutputHook, Parameter, Metric, Artifact
+from . import InputHook, OutputHook, Traced
 from typing import Any
 import yaml
+import logging
+
+# Configure basic logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 # Example hooks
 class YAMLConfigInput(InputHook):
@@ -38,9 +42,11 @@ class TypeValidationHook(InputHook):
         return None  # This hook only validates
 
     def validate(self, name: str, value: Any, type_hint: type) -> Any:
-        # Get the actual type from the Parameter/Metric/Artifact
+        # Get the actual type from any tracked type
+        from . import _TRACKED_TYPES
+        
         origin = getattr(type_hint, '__origin__', None)
-        if origin in (Parameter, Metric, Artifact):
+        if origin in _TRACKED_TYPES.values():
             expected_type = type_hint.__args__[0]
             if not isinstance(value, expected_type):
                 raise TypeError(
@@ -50,12 +56,24 @@ class TypeValidationHook(InputHook):
         print(f"Validated Type of {name} as {type(value).__name__}")
         return value
 
-class MLflowOutput(OutputHook):
+class TracedOutput(OutputHook):
+    """A simple output hook that traces variable changes using standard logging"""
+    
+    def __init__(self, logger_name='hooksett.traced'):
+        self.logger = logging.getLogger(logger_name)
+    
     def save(self, name: str, value: Any, type_hint: type) -> None:
+        # Get tracked type information
+        from . import _TRACKED_TYPES
         origin = getattr(type_hint, '__origin__', None)
-        if origin is Parameter:
-            print("mlflow.log_param(", name, value, ")")
-        elif origin is Metric:
-            print("mlflow.log_metric(", name, value, ")")
-        elif origin is Artifact:
-            print("mlflow.log_artifact(", name, ")")
+        
+        # Get the type name by looking up the origin in the registry
+        type_name = None
+        for t_name, t_alias in _TRACKED_TYPES.items():
+            if origin is t_alias:
+                type_name = t_name
+                break
+                
+        # Log the variable change
+        if type_name:
+            self.logger.info(f"Variable '{name}' of type '{type_name}' updated to {value}")
