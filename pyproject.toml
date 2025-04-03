@@ -35,3 +35,7 @@ test = "pytest tests/"
 
 [tool.pixi.environments]
 test = ["test"]
+
+[tool.pyright]
+venvPath = "."
+venv = ".pixi/envs/default"
