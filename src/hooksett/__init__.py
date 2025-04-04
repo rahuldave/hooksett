@@ -175,9 +175,9 @@ class LocalVarVisitor(ast.NodeVisitor):
                         }
         self.generic_visit(node)
 
-# Function to set up tracing for local variables
+# Function to set up tracking for local variables
 def setup_local_var_tracking(func, local_tracked_vars):
-    """Set up tracing for local variable tracking in a function"""
+    """Set up variable tracking in a function without tracing every access"""
     hook_manager = HookManager()
     
     # Print tracking information - pre-function hook opportunity
@@ -186,56 +186,45 @@ def setup_local_var_tracking(func, local_tracked_vars):
     
     @wraps(func)
     def wrapper(*args, **kwargs):
-        # Dictionary to track the final values of local variables
-        final_tracked_values = {}
+        # Define a dictionary to store the final values
+        final_values = {}
         
-        # Only set up tracing if we have local variables to track
-        if local_tracked_vars:
-            # Define a trace function to monitor variable assignments
-            def trace_local_vars(frame, event, arg):
-                if event == 'line':
-                    # Get current locals
-                    current_locals = frame.f_locals
-                    
-                    # Check for tracked variables
-                    for var_name in local_tracked_vars:
-                        if var_name in current_locals:
-                            # Update the value
-                            final_tracked_values[var_name] = current_locals[var_name]
-                            
-                elif event == 'return':
-                    # Process all tracked variables at function return
-                    for var_name, value in final_tracked_values.items():
-                        # Determine the special type based on tracked_vars info
-                        tracked_type = local_tracked_vars[var_name]['type']
-                        value_type = type(value)
-                        
-                        # Create a synthetic type hint from the registry
-                        type_hint = None
-                        if tracked_type in _TRACKED_TYPES:
-                            tracked_type_alias = _TRACKED_TYPES[tracked_type]
-                            type_hint = tracked_type_alias[value_type]
-                        
-                        # Save the value via hooks if we have a valid type hint
-                        if type_hint:
-                            hook_manager.save_value(var_name, value, type_hint)
-                
-                return trace_local_vars
-
-            # Set up the trace function
-            import sys
-            old_trace = sys.gettrace()
-            sys.settrace(trace_local_vars)
+        # Define a simple tracer function that only captures the final values
+        def trace_func(frame, event, arg):
+            if event == 'return':
+                # Capture final values of all local variables when function returns
+                for var_name in local_tracked_vars:
+                    if var_name in frame.f_locals:
+                        final_values[var_name] = frame.f_locals[var_name]
+            return trace_func
+        
+        # Set up the trace function
+        import sys
+        old_trace = sys.gettrace()
+        sys.settrace(trace_func)
+        
+        try:
+            # Execute the function
+            result = func(*args, **kwargs)
             
-            try:
-                result = func(*args, **kwargs)
-                return result
-            finally:
-                # Restore original trace function
-                sys.settrace(old_trace)
-        else:
-            # No local variables to track, just run the function
-            return func(*args, **kwargs)
+            # Process any tracked variables after function completes
+            for var_name, value in final_values.items():
+                # Get type information
+                tracked_type = local_tracked_vars[var_name]['type']
+                value_type = type(value)
+                
+                # Create synthetic type hint
+                if tracked_type in _TRACKED_TYPES:
+                    tracked_type_alias = _TRACKED_TYPES[tracked_type]
+                    type_hint = tracked_type_alias[value_type]
+                    
+                    # Call hooks to save final value
+                    hook_manager.save_value(var_name, value, type_hint)
+                    
+            return result
+        finally:
+            # Restore original trace function
+            sys.settrace(old_trace)
 
     return wrapper
 
@@ -319,7 +308,7 @@ def track_function(func):
         # If we can't parse the source, assume no local tracked vars
         local_tracked_vars = {}
     
-    # Create a wrapper that handles parameter loading/validation
+    # Create a wrapper that handles parameter loading/validation and local var tracking
     @wraps(func)
     def wrapper(*args, **kwargs):
         # Get function signature
@@ -365,7 +354,46 @@ def track_function(func):
             final_kwargs[name] = value
             hook_manager.save_value(name, value, type_hint)
 
-        # Now run the function with processed parameters and local variable tracking
-        return setup_local_var_tracking(func, local_tracked_vars)(**final_kwargs)
+        # Dictionary to capture local variable values
+        final_tracked_values = {}
+        
+        # Define a trace function that captures local variables at function return
+        def trace_func(frame, event, arg):
+            if event == 'return':
+                # When the function returns, capture the final values
+                for var_name in local_tracked_vars:
+                    if var_name in frame.f_locals:
+                        value = frame.f_locals[var_name]
+                        final_tracked_values[var_name] = value
+            return trace_func
+        
+        # Set up tracing if we have local variables to track
+        import sys
+        old_trace = sys.gettrace()
+        if local_tracked_vars:
+            sys.settrace(trace_func)
+        
+        try:
+            # Execute the function
+            result = func(**final_kwargs)
+            
+            # Process any tracked local variables after function completes
+            for var_name, value in final_tracked_values.items():
+                # Get type information
+                tracked_type = local_tracked_vars[var_name]['type']
+                value_type = type(value)
+                
+                # Create synthetic type hint
+                if tracked_type in _TRACKED_TYPES:
+                    tracked_type_alias = _TRACKED_TYPES[tracked_type]
+                    type_hint = tracked_type_alias[value_type]
+                    
+                    # Save the final value through hooks
+                    hook_manager.save_value(var_name, value, type_hint)
+            
+            return result
+        finally:
+            # Restore original trace function
+            sys.settrace(old_trace)
 
     return wrapper

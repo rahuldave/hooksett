@@ -21,6 +21,8 @@ The library uses Python's type annotations and descriptors to provide a clean, i
   - **Prompt**, **Response**: Examples for AI applications
   - **Feature**, **FeatureList**: Examples for feature tracking
 - **Hooks**: Mechanisms to load, validate, and save these values
+  - Variables are saved to hooks once at function/method completion
+  - Simplifies integration with databases, loggers, or tracking systems
 - **Type Registry**: System to register and manage custom tracked types
 
 ## Files Overview
@@ -104,7 +106,7 @@ The library uses Python's type annotations and descriptors to provide a clean, i
        result: Traced[float] = 0.0
        
        def calculate(self):
-           # This local variable will be tracked
+           # This local variable will be tracked and saved at method exit
            intermediate: Traced[float] = self.initial_value * 2
            self.result = intermediate + 10
    ```
@@ -118,8 +120,10 @@ The library uses Python's type annotations and descriptors to provide a clean, i
        x: Traced[float] = None,  # Load from hook
        y: Traced[float] = 5.0    # Default value
    ):
-       # This local variable will be tracked
+       # This local variable will be tracked and saved once at function exit
+       # Even if modified multiple times within the function
        result: Traced[float] = x * y
+       result = result * 2  # Only the final value is saved to hooks
        return result
    ```
 
